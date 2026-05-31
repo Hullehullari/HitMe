@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Hit Me!</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-family: 'Bebas Neue', sans-serif;
+    }
+
+    canvas { display: block; }
+
+    .controls {
+      height: 110px;
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      background: #060609;
+      border-top: 1px solid #1a1a2e;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      flex: 1;
+      border: none;
+      border-radius: 14px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.8rem;
+      letter-spacing: 0.08em;
+      color: white;
+      cursor: pointer;
+      transition: transform 0.08s, filter 0.08s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    .btn:active {
+      transform: scale(0.91);
+      filter: brightness(1.5);
+    }
+
+    #leftBtn  { background: linear-gradient(145deg, #9b1c1c, #ef4444); }
+    #rightBtn { background: linear-gradient(145deg, #1e3a8a, #3b82f6); }
+
+    #resetBtn {
+      position: fixed;
+      top: 10px; right: 10px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #aaa;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 0.85rem;
+      letter-spacing: 0.1em;
+      padding: 6px 14px;
+      border-radius: 20px;
+      cursor: pointer;
+      z-index: 20;
+    }
+    #resetBtn:active { opacity: 0.5; }
+
+    #hitLabel {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 4rem;
+      letter-spacing: 0.1em;
+      color: white;
+      opacity: 0;
+      pointer-events: none;
+      text-shadow: 0 0 20px currentColor;
+      transition: none;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="controls">
+  <button class="btn" id="leftBtn">👊 LEFT</button>
+  <button class="btn" id="rightBtn">RIGHT 👊</button>
+</div>
+
+<button id="resetBtn">↺ RESET</button>
+<div id="hitLabel"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+  const { Engine, Render, Runner, Bodies, Body, Composite, Constraint } = Matter;
+
+  const canvas   = document.getElementById('c');
+  const hitLabel = document.getElementById('hitLabel');
+  const CTRL_H   = 110;
+
+  let engine, render, runner, person;
+
+  // ─── Size helpers ───────────────────────────────────────────────────────────
+  function dims() {
+    return { W: window.innerWidth, H: window.innerHeight - CTRL_H };
+  }
+
+  // ─── Build the ragdoll person from rectangles ────────────────────────────────
+  function makePerson(W, H) {
+    const cx    = W / 2;
+    const floor = H - 20;           // y of ground surface
+
+    const HEAD  = { w: 38, h: 38 };
+    const TORSO = { w: 30, h: 54 };
+    const LEG   = { w: 13, h: 42 };
+
+    const legY   = floor  - LEG.h   / 2;
+    const torsoY = legY   - LEG.h   / 2 - TORSO.h / 2 - 1;
+    const headY  = torsoY - TORSO.h / 2 - HEAD.h  / 2 - 1;
+
+    const mk = (x, y, w, h, color) => Bodies.rectangle(x, y, w, h, {
+      restitution : 0.35,
+      friction    : 0.6,
+      frictionAir : 0.018,
+      render      : { fillStyle: color }
+    });
+
+    const head  = mk(cx,      headY,  HEAD.w,  HEAD.h,  '#ef4444');
+    const torso = mk(cx,      torsoY, TORSO.w, TORSO.h, '#f59e0b');
+    const legL  = mk(cx - 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
+    const legR  = mk(cx + 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
+
+    const con = (bA, bB, pA, pB) => Constraint.create({
+      bodyA: bA, bodyB: bB,
+      pointA: pA, pointB: pB,
+      stiffness: 0.5, damping: 0.15, length: 0,
+      render: { visible: false }
+    });
+
+    const neck = con(head,  torso, { x: 0,   y:  HEAD.h  / 2 }, { x: 0,   y: -TORSO.h / 2 });
+    const hipL = con(torso, legL,  { x: -10, y:  TORSO.h / 2 }, { x: 0,   y: -LEG.h   / 2 });
+    const hipR = con(torso, legR,  { x:  10, y:  TORSO.h / 2 }, { x: 0,   y: -LEG.h   / 2 });
+
+    return {
+      all         : [head, torso, legL, legR, neck, hipL, hipR],
+      bodies      : [head, torso, legL, legR],
+      constraints : [neck, hipL, hipR],
+      head, torso, legL, legR
+    };
+  }
+
+  // ─── Full init (engine + renderer) ──────────────────────────────────────────
+  function init() {
+    if (render) {
+      Render.stop(render);
+      Runner.stop(runner);
+      Matter.Engine.clear(engine);
+    }
+
+    const { W, H } = dims();
+
+    engine = Engine.create({ gravity: { x: 0, y: 2 } });
+
+    render = Render.create({
+      canvas,
+      engine,
+      options: { width: W, height: H, wireframes: false, background: '#0a0a0f' }
+    });
+
+    runner = Runner.create();
+
+    // Static bodies: ground + side walls
+    const ground = Bodies.rectangle(W / 2, H - 5, W * 3, 30, {
+      isStatic: true,
+      render   : { fillStyle: '#1e1b4b' }
+    });
+    const wallL = Bodies.rectangle(-15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
+    const wallR = Bodies.rectangle(W + 15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
+
+    person = makePerson(W, H);
+    Composite.add(engine.world, [ground, wallL, wallR, ...person.all]);
+
+    Render.run(render);
+    Runner.run(runner, engine);
+  }
+
+  // ─── Reset: remove + re-add person, keep engine running ─────────────────────
+  function reset() {
+    person.bodies.forEach(b => Composite.remove(engine.world, b));
+    person.constraints.forEach(c => Composite.remove(engine.world, c));
+    const { W, H } = dims();
+    person = makePerson(W, H);
+    Composite.add(engine.world, person.all);
+  }
+
+  // ─── Apply punch force ───────────────────────────────────────────────────────
+  const HITS = ['POW!', 'BAM!', 'OOF!', 'WHACK!', 'THUD!'];
+  let labelTimer;
+
+  function hit(dir) {
+    // dir +1 = push right (hit from left side)
+    // dir −1 = push left  (hit from right side)
+    const forces = [
+      [person.head,  dir * 0.13, -0.07],
+      [person.torso, dir * 0.08, -0.04],
+      [person.legL,  dir * 0.05, -0.025],
+      [person.legR,  dir * 0.05, -0.025],
+    ];
+
+    for (const [b, fx, fy] of forces) {
+      Body.applyForce(b, b.position, { x: fx, y: fy });
+    }
+    Body.setAngularVelocity(person.torso, dir * 0.35);
+    Body.setAngularVelocity(person.head,  dir * 0.2);
+
+    // Flash label
+    clearTimeout(labelTimer);
+    hitLabel.textContent = HITS[Math.floor(Math.random() * HITS.length)];
+    hitLabel.style.color = dir > 0 ? '#ef4444' : '#3b82f6';
+    hitLabel.style.opacity = '1';
+    hitLabel.style.left = (dir > 0 ? '35%' : '65%');
+    labelTimer = setTimeout(() => hitLabel.style.opacity = '0', 500);
+  }
+
+  // ─── Event listeners ─────────────────────────────────────────────────────────
+  document.getElementById('leftBtn') .addEventListener('pointerdown', e => { e.preventDefault(); hit(+1); });
+  document.getElementById('rightBtn').addEventListener('pointerdown', e => { e.preventDefault(); hit(-1); });
+  document.getElementById('resetBtn').addEventListener('click', reset);
+
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(init, 250);
+  });
+
+  init();
+</script>
+</body>
+</html>
