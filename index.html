@@ -99,7 +99,26 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <script>
-  const { Engine, Render, Runner, Bodies, Body, Composite, Constraint } = Matter;
+  const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Events } = Matter;
+  let faceCanvas = null;
+  const faceImg = new Image();
+  faceImg.src = 'Hitme.png';
+  faceImg.onload = () => { faceCanvas = removeBg(faceImg); };
+
+  function removeBg(img) {
+    const oc = document.createElement('canvas');
+    oc.width = img.naturalWidth;
+    oc.height = img.naturalHeight;
+    const ctx = oc.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const d = ctx.getImageData(0, 0, oc.width, oc.height);
+    for (let i = 0; i < d.data.length; i += 4) {
+      if (d.data[i] < 30 && d.data[i+1] < 30 && d.data[i+2] < 30)
+        d.data[i + 3] = 0; // punch out black pixels
+    }
+    ctx.putImageData(d, 0, 0);
+    return oc;
+  }
 
   const canvas   = document.getElementById('c');
   const hitLabel = document.getElementById('hitLabel');
@@ -132,7 +151,7 @@
       render      : { fillStyle: color }
     });
 
-    const head  = mk(cx,      headY,  HEAD.w,  HEAD.h,  '#ef4444');
+    const head  = mk(cx, headY, HEAD.w, HEAD.h, 'rgba(0,0,0,0)');
     const torso = mk(cx,      torsoY, TORSO.w, TORSO.h, '#f59e0b');
     const legL  = mk(cx - 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
     const legR  = mk(cx + 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
@@ -154,6 +173,22 @@
       constraints : [neck, hipL, hipR],
       head, torso, legL, legR
     };
+  }
+
+  function drawFace() {
+    if (!faceCanvas || !person) return;
+    const ctx = render.context;
+    const { position: pos, angle } = person.head;
+    const size = 84; // slightly bigger than the 38px physics box
+
+    ctx.save();
+    ctx.translate(pos.x, pos.y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.arc(0, 0, size / 2, 0, Math.PI * 2); // circular clip
+    ctx.clip();
+    ctx.drawImage(faceCanvas, -size / 2, -size / 2, size, size);
+    ctx.restore();
   }
 
   // ─── Full init (engine + renderer) ──────────────────────────────────────────
@@ -190,6 +225,7 @@
 
     Render.run(render);
     Runner.run(runner, engine);
+    Events.on(render, 'afterRender', drawFace);
   }
 
   // ─── Reset: remove + re-add person, keep engine running ─────────────────────
