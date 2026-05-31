@@ -183,7 +183,8 @@
     });
     const wallL = Bodies.rectangle(-15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
     const wallR = Bodies.rectangle(W + 15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
-
+    const ceiling = Bodies.rectangle(W / 2, -15, W * 3, 30, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
+    
     person = makePerson(W, H);
     Composite.add(engine.world, [ground, wallL, wallR, ...person.all]);
 
