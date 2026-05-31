@@ -100,25 +100,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <script>
   const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Events } = Matter;
-  let faceCanvas = null;
-  const faceImg = new Image();
-  faceImg.src = 'Hitme.png';
-  faceImg.onload = () => { faceCanvas = removeBg(faceImg); };
-
-  function removeBg(img) {
-    const oc = document.createElement('canvas');
-    oc.width = img.naturalWidth;
-    oc.height = img.naturalHeight;
-    const ctx = oc.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const d = ctx.getImageData(0, 0, oc.width, oc.height);
-    for (let i = 0; i < d.data.length; i += 4) {
-      if (d.data[i] < 30 && d.data[i+1] < 30 && d.data[i+2] < 30)
-        d.data[i + 3] = 0; // punch out black pixels
-    }
-    ctx.putImageData(d, 0, 0);
-    return oc;
-  }
 
   const canvas   = document.getElementById('c');
   const hitLabel = document.getElementById('hitLabel');
@@ -126,16 +107,141 @@
 
   let engine, render, runner, person;
 
-  // ─── Size helpers ───────────────────────────────────────────────────────────
+  // ── Face image ────────────────────────────────────────────────────────────────
+  let faceCanvas = null;
+  const faceImg  = new Image();
+  faceImg.src    = 'Hitme.png';
+  faceImg.onload = () => { faceCanvas = removeBg(faceImg); };
+
+  function removeBg(img) {
+    const oc = document.createElement('canvas');
+    oc.width = img.naturalWidth; oc.height = img.naturalHeight;
+    const c = oc.getContext('2d');
+    c.drawImage(img, 0, 0);
+    const d = c.getImageData(0, 0, oc.width, oc.height);
+    for (let i = 0; i < d.data.length; i += 4)
+      if (d.data[i] < 30 && d.data[i+1] < 30 && d.data[i+2] < 30) d.data[i+3] = 0;
+    c.putImageData(d, 0, 0);
+    return oc;
+  }
+
+  // ── Wounds ────────────────────────────────────────────────────────────────────
+  // 4 unique wound slots — one of each type max, no stacking
+  const WOUND_TYPES = [
+    { id: 'eye_left',  x: -19, y: -9  },
+    { id: 'eye_right', x:  19, y: -9  },
+    { id: 'cut',       x:   3, y: -26 },
+    { id: 'bruise',    x: -20, y:   6 },
+  ];
+  const WOUND_DURATION = 5000; // ms until fully faded
+  let wounds = [];             // { id, x, y, createdAt }
+
+  function addWound() {
+    const now       = Date.now();
+    const activeIds = new Set(wounds.map(w => w.id));
+    const available = WOUND_TYPES.filter(w => !activeIds.has(w.id));
+
+    if (available.length === 0) {
+      wounds.forEach(w => w.createdAt = now); // all types present → just refresh timers
+      return;
+    }
+    if (wounds.length >= WOUND_TYPES.length) wounds.shift();
+    const chosen = available[Math.floor(Math.random() * available.length)];
+    wounds.push({ ...chosen, createdAt: now });
+  }
+
+  function drawWound(ctx, { id, x, y }) {
+    if (id === 'eye_left' || id === 'eye_right') {
+      const g = ctx.createRadialGradient(x, y, 1, x, y, 13);
+      g.addColorStop(0,   'rgba(20,0,50,0.95)');
+      g.addColorStop(0.5, 'rgba(110,10,40,0.65)');
+      g.addColorStop(1,   'rgba(80,0,20,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 14, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (id === 'cut') {
+      ctx.strokeStyle = '#cc1111'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(x - 7, y - 2); ctx.lineTo(x + 7, y + 2); ctx.stroke();
+      ctx.fillStyle = '#990000';
+      ctx.beginPath(); ctx.ellipse(x + 3, y + 8, 2.5, 5, 0.2, 0, Math.PI * 2); ctx.fill();
+    } else if (id === 'bruise') {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 14);
+      g.addColorStop(0,   'rgba(90,10,90,0.8)');
+      g.addColorStop(0.6, 'rgba(70,10,50,0.4)');
+      g.addColorStop(1,   'rgba(40,0,40,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.ellipse(x, y, 14, 9, -0.3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // ── Hearts ────────────────────────────────────────────────────────────────────
+  const HEART_DURATION = 2400;
+  let hearts = [];
+
+  function spawnHearts() {
+    const hx = person ? person.head.position.x : window.innerWidth / 2;
+    const hy = person ? person.head.position.y : 200;
+    const EMOJIS = ['❤️', '🩷', '💗', '💕'];
+
+    // 8 hearts, staggered
+    for (let i = 0; i < 8; i++) {
+      setTimeout(() => hearts.push({
+        x: hx + (Math.random() - 0.5) * 80,
+        y: hy + (Math.random() - 0.5) * 20,
+        vx: (Math.random() - 0.5) * 1.5,
+        vy: -(1.4 + Math.random() * 2),
+        createdAt: Date.now(),
+        size: 14 + Math.random() * 14,
+        emoji: EMOJIS[Math.floor(Math.random() * EMOJIS.length)],
+      }), i * 130);
+    }
+    // One kiss right at head
+    hearts.push({ x: hx, y: hy - 10, vx: 0, vy: -1.8, createdAt: Date.now(), size: 34, emoji: '💋' });
+  }
+
+  function updateAndDrawHearts(ctx) {
+    const now = Date.now();
+    hearts = hearts.filter(h => now - h.createdAt < HEART_DURATION);
+    for (const h of hearts) {
+      const p     = (now - h.createdAt) / HEART_DURATION;
+      const alpha = p < 0.65 ? 1 : 1 - (p - 0.65) / 0.35;
+      h.x += h.vx; h.y += h.vy; h.vy += 0.02;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.font = `${h.size * (1 + p * 0.3)}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(h.emoji, h.x, h.y);
+      ctx.restore();
+    }
+  }
+
+  // ── Idle → kiss logic ─────────────────────────────────────────────────────────
+  const IDLE_MS     = 5000;
+  let lastHitTime   = 0;
+  let kissTriggered = false;
+
+  function checkIdle() {
+    if (kissTriggered || lastHitTime === 0) return;
+    if (Date.now() - lastHitTime >= IDLE_MS) {
+      kissTriggered = true;
+      // Jump wounds into their fade-out phase so they dissolve as person recovers
+      const now = Date.now();
+      wounds.forEach(w => { w.createdAt = now - WOUND_DURATION * 0.62; });
+      reset();
+      setTimeout(spawnHearts, 350);
+    }
+  }
+
+  // ── Dimensions ───────────────────────────────────────────────────────────────
   function dims() {
     return { W: window.innerWidth, H: window.innerHeight - CTRL_H };
   }
 
-  // ─── Build the ragdoll person from rectangles ────────────────────────────────
+  // ── Ragdoll ───────────────────────────────────────────────────────────────────
   function makePerson(W, H) {
     const cx    = W / 2;
-    const floor = H - 20;           // y of ground surface
-
+    const floor = H - 20;
     const HEAD  = { w: 38, h: 38 };
     const TORSO = { w: 30, h: 54 };
     const LEG   = { w: 13, h: 42 };
@@ -145,137 +251,138 @@
     const headY  = torsoY - TORSO.h / 2 - HEAD.h  / 2 - 1;
 
     const mk = (x, y, w, h, color) => Bodies.rectangle(x, y, w, h, {
-      restitution : 0.35,
-      friction    : 0.6,
-      frictionAir : 0.018,
-      render      : { fillStyle: color }
+      restitution: 0.35, friction: 0.6, frictionAir: 0.018,
+      render: { fillStyle: color }
     });
 
-    const head  = mk(cx, headY, HEAD.w, HEAD.h, 'rgba(0,0,0,0)');
+    const head  = mk(cx,      headY,  HEAD.w,  HEAD.h,  'rgba(0,0,0,0)');
     const torso = mk(cx,      torsoY, TORSO.w, TORSO.h, '#f59e0b');
     const legL  = mk(cx - 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
     const legR  = mk(cx + 10, legY,   LEG.w,   LEG.h,   '#7c3aed');
 
     const con = (bA, bB, pA, pB) => Constraint.create({
-      bodyA: bA, bodyB: bB,
-      pointA: pA, pointB: pB,
-      stiffness: 0.5, damping: 0.15, length: 0,
-      render: { visible: false }
+      bodyA: bA, bodyB: bB, pointA: pA, pointB: pB,
+      stiffness: 0.5, damping: 0.15, length: 0, render: { visible: false }
     });
 
-    const neck = con(head,  torso, { x: 0,   y:  HEAD.h  / 2 }, { x: 0,   y: -TORSO.h / 2 });
-    const hipL = con(torso, legL,  { x: -10, y:  TORSO.h / 2 }, { x: 0,   y: -LEG.h   / 2 });
-    const hipR = con(torso, legR,  { x:  10, y:  TORSO.h / 2 }, { x: 0,   y: -LEG.h   / 2 });
-
     return {
-      all         : [head, torso, legL, legR, neck, hipL, hipR],
-      bodies      : [head, torso, legL, legR],
-      constraints : [neck, hipL, hipR],
+      all: [head, torso, legL, legR,
+        con(head,  torso, { x: 0,   y:  HEAD.h  / 2 }, { x: 0,  y: -TORSO.h / 2 }),
+        con(torso, legL,  { x: -10, y:  TORSO.h / 2 }, { x: 0,  y: -LEG.h   / 2 }),
+        con(torso, legR,  { x:  10, y:  TORSO.h / 2 }, { x: 0,  y: -LEG.h   / 2 }),
+      ],
+      bodies: [head, torso, legL, legR],
+      constraints: [], // constraints added inline above; kept for remove loop below
       head, torso, legL, legR
     };
   }
 
+  // ── Draw face + wounds ────────────────────────────────────────────────────────
   function drawFace() {
     if (!faceCanvas || !person) return;
-    const ctx = render.context;
+    const ctx  = render.context;
     const { position: pos, angle } = person.head;
-    const size = 84; // slightly bigger than the 38px physics box
+    const SIZE = 84;
 
+    // Face photo
     ctx.save();
-    ctx.translate(pos.x, pos.y);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.arc(0, 0, size / 2, 0, Math.PI * 2); // circular clip
-    ctx.clip();
-    ctx.drawImage(faceCanvas, -size / 2, -size / 2, size, size);
+    ctx.translate(pos.x, pos.y); ctx.rotate(angle);
+    ctx.beginPath(); ctx.arc(0, 0, SIZE / 2, 0, Math.PI * 2); ctx.clip();
+    ctx.drawImage(faceCanvas, -SIZE / 2, -SIZE / 2, SIZE, SIZE);
     ctx.restore();
+
+    // Wounds (clipped to same circle, each with its own alpha)
+    const now = Date.now();
+    wounds = wounds.filter(w => now - w.createdAt < WOUND_DURATION);
+    for (const wound of wounds) {
+      const elapsed = now - wound.createdAt;
+      const alpha   = elapsed < WOUND_DURATION * 0.6
+        ? 1
+        : 1 - (elapsed - WOUND_DURATION * 0.6) / (WOUND_DURATION * 0.4);
+      ctx.save();
+      ctx.translate(pos.x, pos.y); ctx.rotate(angle);
+      ctx.globalAlpha = Math.max(0, alpha);
+      ctx.beginPath(); ctx.arc(0, 0, SIZE / 2, 0, Math.PI * 2); ctx.clip();
+      drawWound(ctx, wound);
+      ctx.restore();
+    }
   }
 
-  // ─── Full init (engine + renderer) ──────────────────────────────────────────
+  // ── Init ──────────────────────────────────────────────────────────────────────
   function init() {
-    if (render) {
-      Render.stop(render);
-      Runner.stop(runner);
-      Matter.Engine.clear(engine);
-    }
-
+    if (render) { Render.stop(render); Runner.stop(runner); Matter.Engine.clear(engine); }
     const { W, H } = dims();
 
     engine = Engine.create({ gravity: { x: 0, y: 2 } });
-
-    render = Render.create({
-      canvas,
-      engine,
-      options: { width: W, height: H, wireframes: false, background: '#0a0a0f' }
-    });
-
+    render = Render.create({ canvas, engine,
+      options: { width: W, height: H, wireframes: false, background: '#0a0a0f' } });
     runner = Runner.create();
 
-    // Static bodies: ground + side walls
-    const ground = Bodies.rectangle(W / 2, H - 5, W * 3, 30, {
-      isStatic: true,
-      render   : { fillStyle: '#1e1b4b' }
-    });
-    const wallL = Bodies.rectangle(-15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
-    const wallR = Bodies.rectangle(W + 15, H / 2, 30, H * 2, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
-    const ceiling = Bodies.rectangle(W / 2, -15, W * 3, 30, { isStatic: true, render: { fillStyle: '#0a0a0f' } });
+    Composite.add(engine.world, [
+      Bodies.rectangle(W/2,  H-5,  W*3, 30, { isStatic: true, render: { fillStyle: '#1e1b4b' } }),
+      Bodies.rectangle(W/2, -15,   W*3, 30, { isStatic: true, render: { fillStyle: '#0a0a0f' } }),
+      Bodies.rectangle(-15,  H/2,  30, H*2, { isStatic: true, render: { fillStyle: '#0a0a0f' } }),
+      Bodies.rectangle(W+15, H/2,  30, H*2, { isStatic: true, render: { fillStyle: '#0a0a0f' } }),
+    ]);
 
     person = makePerson(W, H);
-    Composite.add(engine.world, [ground, wallL, wallR, ceiling, ...person.all]);
+    Composite.add(engine.world, person.all);
 
     Render.run(render);
     Runner.run(runner, engine);
-    Events.on(render, 'afterRender', drawFace);
+
+    Events.on(render, 'afterRender', () => {
+      drawFace();
+      updateAndDrawHearts(render.context);
+      checkIdle();
+    });
   }
 
-  // ─── Reset: remove + re-add person, keep engine running ─────────────────────
+  // ── Reset ─────────────────────────────────────────────────────────────────────
   function reset() {
-    person.bodies.forEach(b => Composite.remove(engine.world, b));
-    person.constraints.forEach(c => Composite.remove(engine.world, c));
+    // Remove all person bodies (constraints are removed with their bodies in Matter.js)
+    person.all.forEach(obj => Composite.remove(engine.world, obj));
     const { W, H } = dims();
     person = makePerson(W, H);
     Composite.add(engine.world, person.all);
   }
 
-  // ─── Apply punch force ───────────────────────────────────────────────────────
+  // ── Hit ───────────────────────────────────────────────────────────────────────
   const HITS = ['POW!', 'BAM!', 'OOF!', 'WHACK!', 'THUD!'];
   let labelTimer;
 
   function hit(dir) {
-    // dir +1 = push right (hit from left side)
-    // dir −1 = push left  (hit from right side)
-    const forces = [
-      [person.head,  dir * 0.13, -0.07],
-      [person.torso, dir * 0.08, -0.04],
+    lastHitTime   = Date.now();
+    kissTriggered = false;
+    addWound();
+
+    for (const [b, fx, fy] of [
+      [person.head,  dir * 0.13, -0.07 ],
+      [person.torso, dir * 0.08, -0.04 ],
       [person.legL,  dir * 0.05, -0.025],
       [person.legR,  dir * 0.05, -0.025],
-    ];
+    ]) Body.applyForce(b, b.position, { x: fx, y: fy });
 
-    for (const [b, fx, fy] of forces) {
-      Body.applyForce(b, b.position, { x: fx, y: fy });
-    }
     Body.setAngularVelocity(person.torso, dir * 0.35);
     Body.setAngularVelocity(person.head,  dir * 0.2);
 
-    // Flash label
     clearTimeout(labelTimer);
-    hitLabel.textContent = HITS[Math.floor(Math.random() * HITS.length)];
-    hitLabel.style.color = dir > 0 ? '#ef4444' : '#3b82f6';
-    hitLabel.style.opacity = '1';
-    hitLabel.style.left = (dir > 0 ? '35%' : '65%');
+    hitLabel.textContent    = HITS[Math.floor(Math.random() * HITS.length)];
+    hitLabel.style.color    = dir > 0 ? '#ef4444' : '#3b82f6';
+    hitLabel.style.opacity  = '1';
+    hitLabel.style.left     = dir > 0 ? '35%' : '65%';
     labelTimer = setTimeout(() => hitLabel.style.opacity = '0', 500);
   }
 
-  // ─── Event listeners ─────────────────────────────────────────────────────────
+  // ── Controls ──────────────────────────────────────────────────────────────────
   document.getElementById('leftBtn') .addEventListener('pointerdown', e => { e.preventDefault(); hit(+1); });
   document.getElementById('rightBtn').addEventListener('pointerdown', e => { e.preventDefault(); hit(-1); });
-  document.getElementById('resetBtn').addEventListener('click', reset);
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    wounds = []; hearts = []; lastHitTime = 0; kissTriggered = false; reset();
+  });
 
   let resizeTimer;
-  window.addEventListener('resize', () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(init, 250);
-  });
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(init, 250); });
 
   init();
 </script>
