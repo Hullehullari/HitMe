@@ -380,7 +380,7 @@
     lastHitTime   = now;
     kissTriggered = false;
 
-    playRandom(isCombo ? 'combo' : 'hit');
+    if (Math.random() < 0.4) playRandom(isCombo ? 'combo' : 'hit');
     addWound();
 
     for (const [b, fx, fy] of [
