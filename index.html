@@ -178,6 +178,28 @@
   // ── Hearts ────────────────────────────────────────────────────────────────────
   const HEART_DURATION = 2400;
   let hearts = [];
+  // ── Sounds ─────────────────────────────────────────────────────────────────
+  const SOUNDS = {
+    hit      : ['sounds/hit_1.mp3',      'sounds/hit_2.mp3',      'sounds/hit_3.mp3'],
+    combo    : ['sounds/combo_1.mp3',    'sounds/combo_2.mp3',    'sounds/combo_3.mp3'],
+    recovery : ['sounds/recovery_1.mp3', 'sounds/recovery_2.mp3', 'sounds/recovery_3.mp3'],
+  };
+
+  // Preload so first play has no delay
+  const audioCache = {};
+  Object.values(SOUNDS).flat().forEach(src => { audioCache[src] = new Audio(src); });
+
+  let currentAudio = null;
+
+  function playRandom(group, force = false) {
+    if (!force && currentAudio && !currentAudio.paused) return; // already playing, skip
+    const pool  = SOUNDS[group].filter(src => audioCache[src]);
+    if (!pool.length) return;
+    const audio = audioCache[pool[Math.floor(Math.random() * pool.length)]];
+    currentAudio = audio;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }
 
   function spawnHearts() {
     const hx = person ? person.head.position.x : window.innerWidth / 2;
@@ -225,6 +247,7 @@
     if (kissTriggered || lastHitTime === 0) return;
     if (Date.now() - lastHitTime >= IDLE_MS) {
       kissTriggered = true;
+      playRandom('recovery', true)
       // Jump wounds into their fade-out phase so they dissolve as person recovers
       const now = Date.now();
       wounds.forEach(w => { w.createdAt = now - WOUND_DURATION * 0.62; });
@@ -352,8 +375,12 @@
   let labelTimer;
 
   function hit(dir) {
-    lastHitTime   = Date.now();
+    const now     = Date.now();
+    const isCombo = lastHitTime > 0 && (now - lastHitTime) < 700;
+    lastHitTime   = now;
     kissTriggered = false;
+
+    playRandom(isCombo ? 'combo' : 'hit');
     addWound();
 
     for (const [b, fx, fy] of [
