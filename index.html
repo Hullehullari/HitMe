@@ -178,13 +178,20 @@
   // ── Hearts ────────────────────────────────────────────────────────────────────
   const HEART_DURATION = 2400;
   let hearts = [];
+  let bloodParticles = [];
+  let hitCount       = 0;
+  let detachCount    = 0;
+  let nextDetachAt   = randThreshold();
+
+  function randThreshold() { return 5 + Math.floor(Math.random() * 5); }
+
   // ── Sounds ─────────────────────────────────────────────────────────────────
   const SOUNDS = {
-    hit      : ['sounds/hit_1.mp3',      'sounds/hit_2.mp3',      'sounds/hit_3.mp3'],
-    combo    : ['sounds/combo_1.mp3',    'sounds/combo_2.mp3',    'sounds/combo_3.mp3'],
-    recovery : ['sounds/recovery_1.mp3', 'sounds/recovery_2.mp3', 'sounds/recovery_3.mp3'],
+    hit      : ['sounds/hit_1.mp3',        'sounds/hit_2.mp3',        'sounds/hit_3.mp3'],
+    combo    : ['sounds/combo_1.mp3',      'sounds/combo_2.mp3',      'sounds/combo_3.mp3'],
+    recovery : ['sounds/recovery_1.mp3',   'sounds/recovery_2.mp3',   'sounds/recovery_3.mp3'],
+    dismember: ['sounds/dismember_1.mp3',  'sounds/dismember_2.mp3'],  // ← add this line
   };
-
   // Preload so first play has no delay
   const audioCache = {};
   Object.values(SOUNDS).flat().forEach(src => { audioCache[src] = new Audio(src); });
@@ -288,15 +295,17 @@
       stiffness: 0.5, damping: 0.15, length: 0, render: { visible: false }
     });
 
+    const neck = con(head,  torso, { x: 0,   y:  HEAD.h  / 2 }, { x: 0, y: -TORSO.h / 2 });
+    const hipL = con(torso, legL,  { x: -10, y:  TORSO.h / 2 }, { x: 0, y: -LEG.h   / 2 });
+    const hipR = con(torso, legR,  { x:  10, y:  TORSO.h / 2 }, { x: 0, y: -LEG.h   / 2 });
+
     return {
-      all: [head, torso, legL, legR,
-        con(head,  torso, { x: 0,   y:  HEAD.h  / 2 }, { x: 0,  y: -TORSO.h / 2 }),
-        con(torso, legL,  { x: -10, y:  TORSO.h / 2 }, { x: 0,  y: -LEG.h   / 2 }),
-        con(torso, legR,  { x:  10, y:  TORSO.h / 2 }, { x: 0,  y: -LEG.h   / 2 }),
-      ],
-      bodies: [head, torso, legL, legR],
-      constraints: [], // constraints added inline above; kept for remove loop below
-      head, torso, legL, legR
+      all        : [head, torso, legL, legR, neck, hipL, hipR],
+      bodies     : [head, torso, legL, legR],
+      constraints: [neck, hipL, hipR],
+      head, torso, legL, legR,
+      neck, hipL, hipR,
+      detached   : new Set(),
     };
   }
 
@@ -331,6 +340,64 @@
     }
   }
 
+  function checkDismember() {
+    if (detachCount >= 2) return;
+    hitCount++;
+    if (hitCount >= nextDetachAt) {
+      hitCount     = 0;
+      nextDetachAt = randThreshold();
+      detachPart();
+    }
+  }
+
+  function detachPart() {
+    const available = ['head', 'legL', 'legR'].filter(p => !person.detached.has(p));
+    if (!available.length) return;
+
+    const part = available[Math.floor(Math.random() * available.length)];
+    person.detached.add(part);
+    detachCount++;
+
+    // Remove the joint holding that part
+    const joint = part === 'head' ? person.neck
+                : part === 'legL' ? person.hipL
+                :                   person.hipR;
+    Composite.remove(engine.world, joint);
+
+    // Blood splatter at detachment point
+    const { x, y } = person[part].position;
+    for (let i = 0; i < 22; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1.5 + Math.random() * 5;
+      bloodParticles.push({
+        x, y,
+        vx       : Math.cos(angle) * speed,
+        vy       : Math.sin(angle) * speed - 2.5,
+        size     : 2 + Math.random() * 5,
+        color    : `hsl(${Math.floor(Math.random() * 20)}, 90%, ${25 + Math.random() * 20}%)`,
+        createdAt: Date.now(),
+      });
+    }
+
+    playRandom('dismember', true);
+  }
+
+function updateAndDrawBlood(ctx) {
+  const now = Date.now();
+  bloodParticles = bloodParticles.filter(p => now - p.createdAt < 1600);
+  for (const p of bloodParticles) {
+    const alpha = 1 - (now - p.createdAt) / 1600;
+    p.x += p.vx; p.y += p.vy; p.vy += 0.18; // gravity drip
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle   = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
   // ── Init ──────────────────────────────────────────────────────────────────────
   function init() {
     if (render) { Render.stop(render); Runner.stop(runner); Matter.Engine.clear(engine); }
@@ -357,6 +424,7 @@
     Events.on(render, 'afterRender', () => {
       drawFace();
       updateAndDrawHearts(render.context);
+      updateAndDrawBlood(render.context);
       checkIdle();
     });
   }
@@ -368,6 +436,9 @@
     const { W, H } = dims();
     person = makePerson(W, H);
     Composite.add(engine.world, person.all);
+    hitCount      = 0;       // ← add
+    detachCount   = 0;       // ← add
+    bloodParticles = []; 
   }
 
   // ── Hit ───────────────────────────────────────────────────────────────────────
@@ -382,6 +453,7 @@
 
     if (Math.random() < 0.4) playRandom(isCombo ? 'combo' : 'hit');
     addWound();
+    checkDismember();
 
     for (const [b, fx, fy] of [
       [person.head,  dir * 0.13, -0.07 ],
