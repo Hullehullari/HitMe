@@ -452,7 +452,7 @@ function updateAndDrawBlood(ctx) {
     lastHitTime   = now;
     kissTriggered = false;
 
-    if (Math.random() < 0.4) playRandom(isCombo ? 'combo' : 'hit');
+    if (Math.random() < 1) playRandom(isCombo ? 'combo' : 'hit');
     addWound();
     checkDismember();
 
